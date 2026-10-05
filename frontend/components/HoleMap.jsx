@@ -27,7 +27,7 @@ const CORE_COLOUR = [79, 209, 197]; // --accent
 const CONFIDENTIAL_COLOUR = [255, 138, 122]; // matches .badge.confidential
 
 export default function HoleMap({
-  holes = [], selectedId, onSelect, onHover, selectedIdB, flyToSelection = true, flyToId,
+  holes = [], selectedId, onSelect, onHover, selectedIdB, flyToSelection = true, flyToId, allow3d = true,
 }) {
   const containerRef = useRef(null);
   const overlayRef = useRef(null);
@@ -154,7 +154,7 @@ export default function HoleMap({
     const map = readyMap;
     if (!map || !flyToSelection) return;
     const target = holes.find((hole) => hole.hole_id === effectiveFlyToId);
-    if (target) {
+    if (target && Number.isFinite(target.longitude) && Number.isFinite(target.latitude)) {
       map.easeTo({ center: [target.longitude, target.latitude], duration: 600 });
     }
   }, [readyMap, effectiveFlyToId, holes, flyToSelection]);
@@ -185,9 +185,9 @@ export default function HoleMap({
     const overlay = overlayRef.current;
     if (!readyMap || !overlay) return;
     overlay.setProps({
-      layers: show3d ? buildCoreLayers(holes, { exaggeration, coreWidth, selectedId, onSelect, onHover }) : [],
+      layers: allow3d && show3d ? buildCoreLayers(holes, { exaggeration, coreWidth, selectedId, onSelect, onHover }) : [],
     });
-  }, [readyMap, holes, show3d, exaggeration, coreWidth, selectedId, onSelect, onHover]);
+  }, [readyMap, holes, allow3d, show3d, exaggeration, coreWidth, selectedId, onSelect, onHover]);
 
   return (
     <>
@@ -212,16 +212,16 @@ export default function HoleMap({
           </button>
         </div>
 
-        <label className="checkbox" style={{ marginTop: 14 }}>
+        {allow3d && <label className="checkbox" style={{ marginTop: 14 }}>
           <input
             type="checkbox"
             checked={show3d}
             onChange={(event) => setShow3d(event.target.checked)}
           />
           3D core (real dip/azimuth)
-        </label>
+        </label>}
 
-        {show3d && (
+        {allow3d && show3d && (
           <>
             <p className="section-title" style={{ marginTop: 14 }}>
               Vertical exaggeration ×{exaggeration}
@@ -254,7 +254,7 @@ export default function HoleMap({
         )}
       </div>
 
-      {show3d && <CoreStripPanel holeId={selectedId} />}
+      {allow3d && show3d && <CoreStripPanel holeId={selectedId} />}
     </>
   );
 }
@@ -307,7 +307,7 @@ function pushData(map, holes) {
   if (!source) return;
   source.setData({
     type: "FeatureCollection",
-    features: holes.map((hole) => ({
+    features: holes.filter(hole => Number.isFinite(hole.longitude) && Number.isFinite(hole.latitude)).map((hole) => ({
       type: "Feature",
       id: hole.hole_id, // needed for setFeatureState
       properties: {

@@ -4,8 +4,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { getStats } from "@/lib/api";
+import { useCatalogue } from "@/lib/useCatalogue";
 
 const VIEWS = [
   { href: "/", label: "Explore" },
@@ -15,11 +14,7 @@ const VIEWS = [
 
 export default function Nav() {
   const pathname = usePathname();
-  const [stats, setStats] = useState(null);
-
-  useEffect(() => {
-    getStats().then(setStats).catch(() => setStats(null));
-  }, []);
+  const { holes, loading, error } = useCatalogue();
 
   return (
     <header className="topbar">
@@ -39,11 +34,9 @@ export default function Nav() {
         ))}
       </nav>
 
-      {stats && (
+      {!loading && !error && (
         <div className="topbar-stats">
-          <span>holes <b>{stats.holes.toLocaleString()}</b></span>
-          <span>intervals <b>{stats.measurements.toLocaleString()}</b></span>
-          <span>flagged <b>{stats.anomalies.toLocaleString()}</b></span>
+          <span>holes <b>{holes.length.toLocaleString()}</b></span>
         </div>
       )}
     </header>
