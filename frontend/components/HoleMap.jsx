@@ -52,6 +52,7 @@ export default function HoleMap({
       style: MAP_STYLE,
       center: [MAP_START.longitude, MAP_START.latitude],
       zoom: MAP_START.zoom,
+      attributionControl: { compact: false },
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "metric" }));

@@ -36,3 +36,11 @@ do not fabricate mineral, confidence, or survey values to fill schema gaps.
 4. Verify hole search, details, comparison, and 3D against real backend data.
 
 Run the configuration and API client tests with `npm test`.
+
+## Basemap
+
+Streets uses OpenStreetMap standard raster tiles with visible attribution.
+Keep normal browser caching and referrer headers; do not add bulk download or
+offline prefetch features. The community service has no availability guarantee.
+For higher traffic, configure an appropriate tile provider in `config.js`.
+See the [tile usage policy](https://operations.osmfoundation.org/policies/tiles/).

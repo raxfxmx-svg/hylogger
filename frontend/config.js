@@ -15,8 +15,7 @@ export const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_BASE, process
 export const MEDIA_BASE = API_BASE.replace(/\/api\/?$/, "");
 
 // Basemap: satellite by default, with a plain streets layer as the alternative -
-// same two free, no-API-key raster sources as the wa-drillhole-map/drillcore-viewer
-// reference projects (Esri World Imagery + CARTO light), so switching between them
+// Esri World Imagery + OpenStreetMap standard raster tiles. Switching between them
 // is just toggling layer visibility (see HoleMap.jsx) rather than reloading the
 // whole map style. MapTiler's topo-v2 style is another option if you have a key:
 //   https://api.maptiler.com/maps/topo-v2/style.json?key=YOUR_KEY
@@ -32,9 +31,10 @@ export const MAP_STYLE = {
     },
     light: {
       type: "raster",
-      tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
       tileSize: 256,
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+      maxzoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
     },
   },
   layers: [
