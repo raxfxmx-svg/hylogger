@@ -17,6 +17,7 @@ export default function HoleDetail({ holeId, onSelect }) {
   const [nearby, setNearby] = useState([]);
   // undefined = still checking, null = checked and nothing available, object = real data
   const [spectral, setSpectral] = useState(undefined);
+  const [spectralError, setSpectralError] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -24,7 +25,11 @@ export default function HoleDetail({ holeId, onSelect }) {
     let cancelled = false;
     setError(null);
     setHole(null);
+    setMeasurements([]);
+    setTrays([]);
+    setNearby([]);
     setSpectral(undefined);
+    setSpectralError(null);
 
     Promise.all([
       getHole(holeId),
@@ -41,7 +46,13 @@ export default function HoleDetail({ holeId, onSelect }) {
         // separate request: every hole tries this, but the 5 database5553
         // holes answer instantly while everyone else is a live NVCL lookup
         // (a few seconds) - no need to hold up the rest of the panel on it
-        getSpectralSample(holeId).then((data) => !cancelled && setSpectral(data));
+        getSpectralSample(holeId)
+          .then((data) => !cancelled && setSpectral(data))
+          .catch((err) => {
+            if (cancelled) return;
+            setSpectral(null);
+            setSpectralError(`Could not load spectral data: ${err.message}`);
+          });
       })
       .catch((err) => !cancelled && setError(err.message));
 
@@ -125,7 +136,8 @@ export default function HoleDetail({ holeId, onSelect }) {
           {hole.has_full_spectrum ? "Loading real VSWIR/TIR spectrum…" : "Checking NVCL for a real spectrum here (a few seconds)…"}
         </p>
       )}
-      {spectral === null && (
+      {spectralError && <p className="error">{spectralError}</p>}
+      {spectral === null && !spectralError && (
         <p className="hint">No spectral log available for this hole.</p>
       )}
       {spectral && <FullSpectrum sample={spectral} />}

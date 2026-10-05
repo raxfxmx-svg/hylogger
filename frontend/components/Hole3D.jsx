@@ -26,7 +26,7 @@ function loadImage(url) {
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => resolve(img);
-    img.onerror = reject;
+    img.onerror = () => reject(new Error("A core photo could not be loaded."));
     img.src = url;
   });
 }
@@ -56,21 +56,24 @@ function cropSheetTexture(image, widthPx, yFromPx, yToPx) {
  * useMemo - buildScene picks up the result once it's ready. */
 function usePhotoCylinders(traces) {
   const [byHole, setByHole] = useState({});
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
+    setByHole({});
+    setError(null);
     const holeIds = traces.map((t) => t.hole_id);
 
-    Promise.all(
+    Promise.allSettled(
       holeIds.map(async (holeId) => {
         const coreStrip = await getCoreStrip(holeId);
         const sheet = coreStrip?.sheets?.[0]; // prototype scope: first sheet only
         if (!sheet) return [holeId, null];
 
-        const image = await loadImage(MEDIA_BASE + sheet.photo_url).catch(() => null);
-        if (!image) return [holeId, null];
+        const image = await loadImage(MEDIA_BASE + sheet.photo_url);
 
         const rows = coreStrip.rows.filter((r) => r.sheet_index === sheet.sheet_index);
+        if (!rows.length) throw new Error("The core photo has no depth mapping.");
         const segments = [];
         for (let depth = sheet.depth_from_m; depth < sheet.depth_to_m; depth += PHOTO_SEGMENT_STEP_M) {
           const depthTo = Math.min(depth + PHOTO_SEGMENT_STEP_M, sheet.depth_to_m);
@@ -85,10 +88,17 @@ function usePhotoCylinders(traces) {
         }
         return [holeId, segments];
       })
-    ).then((entries) => {
+    ).then((results) => {
       if (cancelled) return;
       const next = {};
-      for (const [holeId, segments] of entries) if (segments) next[holeId] = segments;
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          const [holeId, segments] = result.value;
+          if (segments) next[holeId] = segments;
+        }
+      }
+      const failure = results.find((result) => result.status === "rejected");
+      setError(failure ? failure.reason?.message || "A core photo could not be loaded." : null);
       setByHole(next);
     });
 
@@ -98,7 +108,7 @@ function usePhotoCylinders(traces) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traces.map((t) => t.hole_id).join(",")]);
 
-  return byHole;
+  return { byHole, error };
 }
 
 // One unit cylinder (radius 1, height 1, centred on its local origin, axis
@@ -140,7 +150,7 @@ function segmentTransform(a, b, coreRadius) {
 
 export default function Hole3D({ traces = [], holes = [], verticalExaggeration = 25, colourBy = "mineral" }) {
   const [hovered, setHovered] = useState(null);
-  const photoCylindersByHole = usePhotoCylinders(traces);
+  const { byHole: photoCylindersByHole, error: photoError } = usePhotoCylinders(traces);
 
   const { segments, collars, anomalies, photoCylinders, view } = useMemo(
     () => buildScene(traces, verticalExaggeration, colourBy, holes, photoCylindersByHole),
@@ -214,6 +224,7 @@ export default function Hole3D({ traces = [], holes = [], verticalExaggeration =
         layers={layers}
         style={{ position: "absolute", inset: 0 }}
       />
+      {photoError && <div className="error" style={{ position: "absolute", bottom: 16, left: 16, maxWidth: 360 }}>Some core photos are unavailable: {photoError}</div>}
       {hovered?.object && (
         <div className="tooltip" style={{ left: hovered.x + 14, top: hovered.y + 14 }}>
           {hovered.object.holeId}

@@ -1,3 +1,6 @@
+const { PHASE_PRODUCTION_BUILD } = require("next/constants");
+const { assertProductionApiBase } = require("./lib/api-config.cjs");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -14,4 +17,10 @@ const nextConfig = {
   ],
 };
 
-module.exports = nextConfig;
+module.exports = (phase) => {
+  if (phase === PHASE_PRODUCTION_BUILD) {
+    const apiBase = assertProductionApiBase(process.env.NEXT_PUBLIC_API_BASE);
+    if (!apiBase) console.warn("NEXT_PUBLIC_API_BASE is unset. Data views will display a service-not-connected message.");
+  }
+  return nextConfig;
+};

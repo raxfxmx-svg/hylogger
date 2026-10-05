@@ -79,7 +79,7 @@ export default function StripLog({
             const y = toY(m.depth_from_m);
             const bandHeight = Math.max(1, toY(m.depth_to_m) - y);
             const uncertain =
-              m.quality_flag === "missing" || m.confidence < CONFIDENCE_THRESHOLD;
+              m.quality_flag === "missing" || m.confidence == null || m.confidence < CONFIDENCE_THRESHOLD;
 
             return (
               <g key={index}>
@@ -122,7 +122,7 @@ export default function StripLog({
           {hover.m.mineral_1 || "no mineral logged"}
           {hover.m.mineral_1_pct ? ` ${(hover.m.mineral_1_pct * 100).toFixed(0)}%` : ""}
           <br />
-          confidence {hover.m.confidence.toFixed(2)} · {hover.m.quality_flag}
+          confidence {Number.isFinite(hover.m.confidence) ? hover.m.confidence.toFixed(2) : "unavailable"} · {hover.m.quality_flag}
           {hover.m.why && (
             <>
               <br />

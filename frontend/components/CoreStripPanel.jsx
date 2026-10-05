@@ -18,17 +18,28 @@ import { MEDIA_BASE } from "@/config";
 
 export default function CoreStripPanel({ holeId, className = "" }) {
   const [strip, setStrip] = useState(undefined);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setError(null);
     if (!holeId) {
       setStrip(undefined);
       return;
     }
     setStrip(undefined);
-    getCoreStrip(holeId).then(setStrip).catch(() => setStrip(null));
+    getCoreStrip(holeId)
+      .then((data) => !cancelled && setStrip(data))
+      .catch((err) => {
+        if (cancelled) return;
+        setStrip(null);
+        setError(err.message);
+      });
+    return () => { cancelled = true; };
   }, [holeId]);
 
-  if (!holeId || strip === null) return null; // nothing selected, or genuinely unavailable - stay out of the way
+  if (holeId && error) return <div className={`core-strip-panel ${className}`}><p className="error">Could not load core photo: {error}</p></div>;
+  if (!holeId || strip === null) return null;
 
   return (
     <div className={`core-strip-panel ${className}`}>

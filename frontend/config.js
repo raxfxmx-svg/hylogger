@@ -3,9 +3,10 @@
 // Almost everything you'd want to tweak lives in this one file.
 // ---------------------------------------------------------------------------
 
-// Where the Django API is. Override with NEXT_PUBLIC_API_BASE in .env.local.
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000/api";
+import { resolveApiBase } from "./lib/api-config.cjs";
+
+// NEXT_PUBLIC_* values are embedded at build time. Localhost is a dev-only default.
+export const API_BASE = resolveApiBase(process.env.NEXT_PUBLIC_API_BASE, process.env.NODE_ENV);
 
 // Django's MEDIA_URL is host-relative (e.g. "/media/tray_images/..."), so it
 // needs the API's own origin prepended - there's no Next.js rewrite proxying

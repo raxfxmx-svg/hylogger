@@ -37,10 +37,19 @@ function ComparePage() {
   const [logA, setLogA] = useState([]);
   const [logB, setLogB] = useState([]);
   const [distance, setDistance] = useState(null);
-  const [error, setError] = useState(null);
+  const [holesError, setHolesError] = useState(null);
+  const [logAError, setLogAError] = useState(null);
+  const [logBError, setLogBError] = useState(null);
+  const [distanceError, setDistanceError] = useState(null);
+  const [logALoading, setLogALoading] = useState(Boolean(aId));
+  const [logBLoading, setLogBLoading] = useState(Boolean(bId));
 
   useEffect(() => {
-    getHoles().then(setHoles).catch((err) => setError(err.message));
+    let cancelled = false;
+    getHoles()
+      .then((data) => !cancelled && setHoles(data))
+      .catch((err) => !cancelled && setHolesError(err.message));
+    return () => { cancelled = true; };
   }, []);
 
   /** The hole under the cursor fills whichever slot makes sense: A first,
@@ -61,19 +70,43 @@ function ComparePage() {
   }
 
   useEffect(() => {
-    if (aId) getMeasurements(aId).then(setLogA).catch(() => setLogA([]));
+    let cancelled = false;
+    setLogA([]);
+    setLogAError(null);
+    setLogALoading(Boolean(aId));
+    if (aId) {
+      getMeasurements(aId)
+        .then((data) => !cancelled && setLogA(data))
+        .catch((err) => !cancelled && setLogAError(`Could not load log for ${aId}: ${err.message}`))
+        .finally(() => !cancelled && setLogALoading(false));
+    }
+    return () => { cancelled = true; };
   }, [aId]);
 
   useEffect(() => {
-    if (bId) getMeasurements(bId).then(setLogB).catch(() => setLogB([]));
+    let cancelled = false;
+    setLogB([]);
+    setLogBError(null);
+    setLogBLoading(Boolean(bId));
+    if (bId) {
+      getMeasurements(bId)
+        .then((data) => !cancelled && setLogB(data))
+        .catch((err) => !cancelled && setLogBError(`Could not load log for ${bId}: ${err.message}`))
+        .finally(() => !cancelled && setLogBLoading(false));
+    }
+    return () => { cancelled = true; };
   }, [bId]);
 
   useEffect(() => {
+    let cancelled = false;
+    setDistance(null);
+    setDistanceError(null);
     if (aId && bId && aId !== bId) {
-      getDistance(aId, bId).then(setDistance).catch((err) => setError(err.message));
-    } else {
-      setDistance(null);
+      getDistance(aId, bId)
+        .then((data) => !cancelled && setDistance(data))
+        .catch((err) => !cancelled && setDistanceError(err.message));
     }
+    return () => { cancelled = true; };
   }, [aId, bId]);
 
   // draw both logs against the same depth scale, or the comparison lies
@@ -95,7 +128,9 @@ function ComparePage() {
         on the left sits level with 40 m on the right.
       </p>
 
-      {error && <div className="error" style={{ marginBottom: 16 }}>{error}</div>}
+      {[holesError, logAError, logBError, distanceError].filter(Boolean).map((message, index) => (
+        <div key={index} className="error" style={{ marginBottom: 16 }}>{message}</div>
+      ))}
 
       <div className="compare-map">
         <HoleMap
@@ -131,7 +166,8 @@ function ComparePage() {
       )}
 
       <div className="compare-grid">
-        {aId && (
+        {aId && logALoading && <p className="hint">Loading log for {aId}…</p>}
+        {aId && !logALoading && !logAError && (
           <StripLog
             measurements={logA}
             maxDepth={deepest}
@@ -140,7 +176,8 @@ function ComparePage() {
             label={holeA ? [aId, distinctName(holeA)].filter(Boolean).join(" · ") : aId}
           />
         )}
-        {bId && (
+        {bId && logBLoading && <p className="hint">Loading log for {bId}…</p>}
+        {bId && !logBLoading && !logBError && (
           <StripLog
             measurements={logB}
             maxDepth={deepest}

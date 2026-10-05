@@ -1,56 +1,30 @@
-// Every call to the Django API goes through here. One place to add auth headers
-// or change error handling later.
-
+// The UI's hole-based API contract. See DEPLOYMENT.md for ETL4 /v1 integration.
 import { API_BASE } from "@/config";
+import { createApiClient, requireArray } from "./api-client.cjs";
 
-async function get(path) {
-  const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(
-      `${response.status} from ${path}. Is the Django server running on ${API_BASE}?`
-    );
-  }
-  return response.json();
-}
+const get = createApiClient(API_BASE);
+const id = encodeURIComponent;
+const list = async (path) => requireArray(await get(path));
 
 export const getStats = () => get("/stats/");
-
 export const getHoles = ({ search = "", anomaliesOnly = false, limit = 3000 } = {}) => {
   const query = new URLSearchParams({ limit: String(limit) });
   if (search) query.set("search", search);
   if (anomaliesOnly) query.set("anomalies_only", "1");
-  return get(`/holes/?${query}`);
+  return list(`/holes/?${query}`);
 };
+export const getHole = (holeId) => get(`/holes/${id(holeId)}/`);
+export const getMeasurements = (holeId) => list(`/holes/${id(holeId)}/measurements/`);
+export const getTrays = (holeId) => list(`/holes/${id(holeId)}/trays/`);
+export const getAnomalies = (holeId) => list(`/holes/${id(holeId)}/anomalies/`);
+export const getTrace = (holeId, stepM = 5) => get(`/holes/${id(holeId)}/trace/?${new URLSearchParams({ step_m: String(stepM) })}`);
+export const getNearby = (holeId, km = 25) => list(`/holes/${id(holeId)}/nearby/?${new URLSearchParams({ km: String(km) })}`);
+export const getDistance = (a, b) => get(`/distance/?${new URLSearchParams({ a, b })}`);
 
-export const getHole = (holeId) => get(`/holes/${holeId}/`);
-export const getMeasurements = (holeId) => get(`/holes/${holeId}/measurements/`);
-export const getTrays = (holeId) => get(`/holes/${holeId}/trays/`);
-export const getAnomalies = (holeId) => get(`/holes/${holeId}/anomalies/`);
-export const getTrace = (holeId, stepM = 5) => get(`/holes/${holeId}/trace/?step_m=${stepM}`);
-export const getNearby = (holeId, km = 25) => get(`/holes/${holeId}/nearby/?km=${km}`);
-export const getDistance = (a, b) => get(`/distance/?a=${a}&b=${b}`);
-
-/**
- * Real VSWIR/TIR spectrum + mineral call, only for the handful of holes with
- * has_full_spectrum=true. null (not an error) for every other hole - that's
- * the normal case, not a failure, so it doesn't go through get()'s throw.
- */
-export const getSpectralSample = async (holeId, depthM) => {
-  const query = depthM != null ? `?depth_m=${depthM}` : "";
-  const response = await fetch(`${API_BASE}/holes/${holeId}/spectral-sample/${query}`, { cache: "no-store" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`${response.status} from /holes/${holeId}/spectral-sample/`);
-  return response.json();
+// Only optional resources interpret 404 as no data. Network/server failures
+// remain visible instead of being mislabeled as an unavailable spectrum/photo.
+export const getSpectralSample = (holeId, depthM) => {
+  const query = depthM != null ? `?${new URLSearchParams({ depth_m: String(depthM) })}` : "";
+  return get(`/holes/${id(holeId)}/spectral-sample/${query}`, { optional: true });
 };
-
-/**
- * Continuous core-photo + TSG strip (core_strip.py output), only for holes
- * that have actually been run through that pipeline. null (not an error)
- * for every other hole - same normal-not-a-failure shape as getSpectralSample.
- */
-export const getCoreStrip = async (holeId) => {
-  const response = await fetch(`${API_BASE}/holes/${holeId}/core-strip/`, { cache: "no-store" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`${response.status} from /holes/${holeId}/core-strip/`);
-  return response.json();
-};
+export const getCoreStrip = (holeId) => get(`/holes/${id(holeId)}/core-strip/`, { optional: true });

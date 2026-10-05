@@ -25,6 +25,7 @@ export default function ExplorePage() {
   const [hoveredId, setHoveredId] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   function openDetail(holeId) {
     setHoveredId(holeId);
@@ -34,15 +35,23 @@ export default function ExplorePage() {
   // refetch when the filters change, with a short pause so we aren't
   // hitting the API on every keystroke
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setHoles([]);
+    setError(null);
     const timer = setTimeout(() => {
       getHoles({ search, anomaliesOnly })
         .then((data) => {
+          if (cancelled) return;
           setHoles(data);
-          setError(null);
         })
-        .catch((err) => setError(err.message));
+        .catch((err) => !cancelled && setError(err.message))
+        .finally(() => !cancelled && setLoading(false));
     }, 250);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [search, anomaliesOnly]);
 
   return (
@@ -67,14 +76,11 @@ export default function ExplorePage() {
 
         <div className="hole-list">
           {error && <div className="error" style={{ margin: 12 }}>{error}</div>}
+          {loading && <p className="hint" style={{ margin: 12 }}>Loading holes…</p>}
 
-          {!error && holes.length === 0 && (
+          {!loading && !error && holes.length === 0 && (
             <p className="empty">
-              No holes match.
-              <br />
-              If the list is empty on first run, load the data:
-              <br />
-              <code className="mono">python manage.py load_data</code>
+              No holes match the current filters.
             </p>
           )}
 
@@ -88,7 +94,7 @@ export default function ExplorePage() {
               <span className="id">{hole.hole_id}</span>
               {distinctName(hole) && <span className="name">{distinctName(hole)}</span>}
               {hole.confidential && <span className="badge confidential">confidential</span>}
-              <span className="len">{Math.round(hole.borehole_length_m || 0)} m</span>
+              <span className="len">{hole.borehole_length_m == null ? "Length unavailable" : `${Math.round(hole.borehole_length_m)} m`}</span>
             </button>
           ))}
         </div>
@@ -97,7 +103,7 @@ export default function ExplorePage() {
       <div className="map-area">
         <HoleMap holes={holes} selectedId={hoveredId} onHover={setHoveredId} onSelect={openDetail} flyToId={detailId} />
         <div className="legend">
-          <div style={{ color: "var(--text-dim)" }}>{holes.length} holes shown</div>
+          <div style={{ color: "var(--text-dim)" }}>{loading ? "Loading holes…" : error ? "Data unavailable" : `${holes.length} holes shown`}</div>
           <div className="legend-item">
             <span className="legend-swatch" style={{ background: "var(--accent)" }} />
             hovered · click for details

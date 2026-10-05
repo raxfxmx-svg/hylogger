@@ -30,14 +30,20 @@ export default function HoleMap({
   holes = [], selectedId, onSelect, onHover, selectedIdB, flyToSelection = true, flyToId,
 }) {
   const containerRef = useRef(null);
-  const mapRef = useRef(null);
   const overlayRef = useRef(null);
-  const readyRef = useRef(false);
+  const callbacksRef = useRef({ onSelect, onHover });
+  const [readyMap, setReadyMap] = useState(null);
 
   const [basemap, setBasemap] = useState("satellite");
   const [show3d, setShow3d] = useState(false);
   const [exaggeration, setExaggeration] = useState(MAP_3D_DEFAULT_EXAGGERATION);
   const [coreWidth, setCoreWidth] = useState(MAP_3D_DEFAULT_CORE_WIDTH_M);
+
+  // Map listeners live for the map's lifetime, but callers can change their
+  // callbacks after every selection (notably Compare's A/B picker).
+  useEffect(() => {
+    callbacksRef.current = { onSelect, onHover };
+  }, [onSelect, onHover]);
 
   // 1. create the map, once
   useEffect(() => {
@@ -92,11 +98,11 @@ export default function HoleMap({
       // click is what actually opens the detail panel, which does fetch data
       map.on("mousemove", "holes-circles", (event) => {
         const feature = event.features?.[0];
-        if (feature) onHover?.(feature.properties.hole_id);
+        if (feature) callbacksRef.current.onHover?.(feature.properties.hole_id);
       });
       map.on("click", "holes-circles", (event) => {
         const feature = event.features?.[0];
-        if (feature) onSelect?.(feature.properties.hole_id);
+        if (feature) callbacksRef.current.onSelect?.(feature.properties.hole_id);
       });
       map.on("mouseenter", "holes-circles", () => {
         map.getCanvas().style.cursor = "pointer";
@@ -105,25 +111,28 @@ export default function HoleMap({
         map.getCanvas().style.cursor = "";
       });
 
-      readyRef.current = true;
-      mapRef.current = map;
-      pushData(map, holes);
+      // Readiness is state so all sync effects below run with the latest
+      // props, even when the API answered before the map finished loading.
+      setReadyMap(map);
     });
 
-    mapRef.current = map;
-    return () => map.remove();
+    return () => {
+      setReadyMap(null);
+      overlayRef.current = null;
+      map.remove();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 2. push new holes into the map whenever the list changes
   useEffect(() => {
-    if (mapRef.current && readyRef.current) pushData(mapRef.current, holes);
-  }, [holes]);
+    if (readyMap) pushData(readyMap, holes);
+  }, [readyMap, holes]);
 
   // 3. highlight the hole(s) - cheap, so this tracks hover (selectedId)
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current) return;
+    const map = readyMap;
+    if (!map) return;
 
     holes.forEach((hole) => {
       map.setFeatureState(
@@ -131,7 +140,7 @@ export default function HoleMap({
         { selectedA: hole.hole_id === selectedId, selectedB: hole.hole_id === selectedIdB }
       );
     });
-  }, [selectedId, selectedIdB, holes]);
+  }, [readyMap, selectedId, selectedIdB, holes]);
 
   // 3b. fly to a hole - deliberately separate from highlighting above, and
   // keyed on flyToId (defaults to selectedId) rather than always hover:
@@ -139,37 +148,33 @@ export default function HoleMap({
   // list previews the highlight without also yanking the camera around.
   // Compare's two-hole picker moves selectedId on every hover of either slot,
   // so it opts out of this entirely via flyToSelection.
-  const effectiveFlyToId = flyToId ?? selectedId;
+  const effectiveFlyToId = flyToId === undefined ? selectedId : flyToId;
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current || !flyToSelection) return;
+    const map = readyMap;
+    if (!map || !flyToSelection) return;
     const target = holes.find((hole) => hole.hole_id === effectiveFlyToId);
     if (target) {
       map.easeTo({ center: [target.longitude, target.latitude], duration: 600 });
     }
-  }, [effectiveFlyToId, holes, flyToSelection]);
+  }, [readyMap, effectiveFlyToId, holes, flyToSelection]);
 
   // 4. switch basemap by toggling raster-layer visibility - no style reload,
   // so the "holes" source/layer above never has to be re-added.
   useEffect(() => {
-    const map = mapRef.current;
+    const map = readyMap;
     if (!map) return;
-    const apply = () => {
-      map.setLayoutProperty("satellite", "visibility", basemap === "satellite" ? "visible" : "none");
-      map.setLayoutProperty("light", "visibility", basemap === "light" ? "visible" : "none");
-    };
-    if (map.isStyleLoaded()) apply();
-    else map.once("load", apply);
-  }, [basemap]);
+    map.setLayoutProperty("satellite", "visibility", basemap === "satellite" ? "visible" : "none");
+    map.setLayoutProperty("light", "visibility", basemap === "light" ? "visible" : "none");
+  }, [readyMap, basemap]);
 
   // 5. tilt the camera when 3D core turns on - at pitch 0 the exaggerated
   // altitude is invisible (you're looking straight down), which is exactly
   // the flat plan view the map opens with.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !readyRef.current) return;
+    const map = readyMap;
+    if (!map) return;
     map.easeTo({ pitch: show3d ? 55 : 0, duration: 600 });
-  }, [show3d]);
+  }, [readyMap, show3d]);
 
   // 6. rebuild the deck.gl core layers whenever the holes, controls or
   // selection change. Cheap: no re-desurvey beyond a handful of trig calls
@@ -177,11 +182,11 @@ export default function HoleMap({
   // in wa-drillhole-map's lib/desurvey.js does for its heavier calculation.
   useEffect(() => {
     const overlay = overlayRef.current;
-    if (!overlay) return;
+    if (!readyMap || !overlay) return;
     overlay.setProps({
       layers: show3d ? buildCoreLayers(holes, { exaggeration, coreWidth, selectedId, onSelect, onHover }) : [],
     });
-  }, [holes, show3d, exaggeration, coreWidth, selectedId, onSelect, onHover]);
+  }, [readyMap, holes, show3d, exaggeration, coreWidth, selectedId, onSelect, onHover]);
 
   return (
     <>

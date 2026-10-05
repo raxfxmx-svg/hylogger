@@ -19,26 +19,58 @@ export default function Viewer3DPage() {
   const [traces, setTraces] = useState([]);
   const [exaggeration, setExaggeration] = useState(DEFAULT_VERTICAL_EXAGGERATION);
   const [colourBy, setColourBy] = useState("mineral");
-  const [error, setError] = useState(null);
+  const [holesError, setHolesError] = useState(null);
+  const [traceError, setTraceError] = useState(null);
+  const [neighbourError, setNeighbourError] = useState(null);
+  const [tracesLoading, setTracesLoading] = useState(false);
+  const [neighboursLoading, setNeighboursLoading] = useState(false);
+  const [neighbourRequest, setNeighbourRequest] = useState(null);
 
   useEffect(() => {
+    let cancelled = false;
     getHoles()
       .then((data) => {
+        if (cancelled) return;
         setHoles(data);
         if (data.length) setChosen([data[0].hole_id]);
       })
-      .catch((err) => setError(err.message));
+      .catch((err) => !cancelled && setHolesError(err.message));
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!chosen.length) {
-      setTraces([]);
-      return;
+    let cancelled = false;
+    setTraces([]);
+    setTraceError(null);
+    setTracesLoading(Boolean(chosen.length));
+    if (chosen.length) {
+      Promise.all(chosen.map((holeId) => getTrace(holeId)))
+        .then((data) => !cancelled && setTraces(data))
+        .catch((err) => !cancelled && setTraceError(`Could not load selected holes: ${err.message}`))
+        .finally(() => !cancelled && setTracesLoading(false));
     }
-    Promise.all(chosen.map((holeId) => getTrace(holeId)))
-      .then(setTraces)
-      .catch((err) => setError(err.message));
+    return () => { cancelled = true; };
   }, [chosen]);
+
+  useEffect(() => {
+    setNeighbourError(null);
+    setNeighboursLoading(false);
+    // A selection change invalidates the pending addition, including clearing
+    // the selection or choosing a different anchor while the lookup is running.
+    if (!neighbourRequest || neighbourRequest.selection !== chosen || !chosen.length) return;
+    let cancelled = false;
+    setNeighboursLoading(true);
+    getNearby(chosen[0], 100)
+      .then((nearby) => {
+        if (cancelled) return;
+        setChosen((current) => current !== chosen ? current :
+          [...new Set([...current, ...nearby.slice(0, 5).map((h) => h.hole_id)])].slice(0, MAX_HOLES)
+        );
+      })
+      .catch((err) => !cancelled && setNeighbourError(`Could not add nearest holes: ${err.message}`))
+      .finally(() => !cancelled && setNeighboursLoading(false));
+    return () => { cancelled = true; };
+  }, [chosen, neighbourRequest]);
 
   function toggle(holeId) {
     setChosen((current) =>
@@ -49,12 +81,9 @@ export default function Viewer3DPage() {
   }
 
   /** Add the closest handful of holes to whatever is already selected. */
-  async function addNeighbours() {
+  function addNeighbours() {
     if (!chosen.length) return;
-    const nearby = await getNearby(chosen[0], 100);
-    setChosen((current) =>
-      [...new Set([...current, ...nearby.slice(0, 5).map((h) => h.hole_id)])].slice(0, MAX_HOLES)
-    );
+    setNeighbourRequest({ selection: chosen });
   }
 
   return (
@@ -69,14 +98,17 @@ export default function Viewer3DPage() {
             className="action"
             style={{ marginTop: 10, width: "100%" }}
             onClick={addNeighbours}
-            disabled={!chosen.length}
+            disabled={!chosen.length || neighboursLoading}
           >
-            Add 5 nearest holes
+            {neighboursLoading ? "Finding nearest holes…" : "Add 5 nearest holes"}
           </button>
         </div>
 
         <div className="hole-list">
-          {error && <div className="error" style={{ margin: 12 }}>{error}</div>}
+          {[holesError, traceError, neighbourError].filter(Boolean).map((message, index) => (
+            <div key={index} className="error" style={{ margin: 12 }}>{message}</div>
+          ))}
+          {tracesLoading && <p className="hint" style={{ margin: 12 }}>Loading selected holes…</p>}
           {holes.map((hole) => (
             <button
               key={hole.hole_id}
@@ -85,7 +117,7 @@ export default function Viewer3DPage() {
             >
               <span className="id">{hole.hole_id}</span>
               {distinctName(hole) && <span className="name">{distinctName(hole)}</span>}
-              <span className="len">{Math.round(hole.borehole_length_m || 0)} m</span>
+              <span className="len">{hole.borehole_length_m == null ? "Length unavailable" : `${Math.round(hole.borehole_length_m)} m`}</span>
             </button>
           ))}
         </div>
