@@ -336,17 +336,21 @@ function cropRow(image, row) {
 /** An ETL4 row crop runs depth left to right; stand it up so depth runs down,
  * like a core_strip.py sheet (`flip` when the source runs right to left). */
 function uprightRow(image, row) {
+  const from = (row.crop_from ?? 0) * image.naturalWidth;
+  const to = (row.crop_to ?? 1) * image.naturalWidth;
+  const width = to - from;
+  const sourceX = row.flip ? image.naturalWidth - to : from;
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalHeight;
-  canvas.height = image.naturalWidth;
+  canvas.height = Math.max(1, Math.round(width));
   const ctx = canvas.getContext("2d");
   ctx.translate(canvas.width, 0);
   ctx.rotate(Math.PI / 2);
   if (row.flip) {
-    ctx.translate(image.naturalWidth, 0);
+    ctx.translate(canvas.height, 0);
     ctx.scale(-1, 1);
   }
-  ctx.drawImage(image, 0, 0);
+  ctx.drawImage(image, sourceX, 0, width, image.naturalHeight, 0, 0, canvas.height, canvas.width);
   return canvas;
 }
 
@@ -358,7 +362,7 @@ function intervalColour(m) {
 function intervalLabel(m) {
   const call = m.mineral_1 || "no mineral called";
   const sure = m.confidence < CONFIDENCE_THRESHOLD ? `uncertain (confidence ${m.confidence.toFixed(2)})` : `confidence ${m.confidence.toFixed(2)}`;
-  return [call, sure, m.why, m.is_anomaly ? "flagged unusual by the anomaly model" : ""].filter(Boolean).join(" · ");
+  return [call, `${sure} (sample agreement)`, m.why, m.is_anomaly ? "flagged unusual by the anomaly model" : ""].filter(Boolean).join(" · ");
 }
 
 function buildLayers(scene, [from, to], depth, visible, labelDropM, photosOn, textures, setHover) {

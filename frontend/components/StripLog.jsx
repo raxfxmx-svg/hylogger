@@ -26,6 +26,11 @@ export default function StripLog({
   label = "",
 }) {
   const [hover, setHover] = useState(null);
+  const showHover = (event, m) => setHover({
+    m,
+    x: Math.max(8, Math.min(event.clientX + 14, window.innerWidth - 276)),
+    y: Math.max(8, Math.min(event.clientY - 10, window.innerHeight - 160)),
+  });
 
   if (!measurements.length) {
     return <p className="hint">No depth log for this hole.</p>;
@@ -89,12 +94,8 @@ export default function StripLog({
                   width={width}
                   height={bandHeight}
                   fill={uncertain ? "url(#uncertain)" : mineralColour(m.mineral_1)}
-                  onMouseEnter={(event) =>
-                    setHover({ m, x: event.clientX, y: event.clientY })
-                  }
-                  onMouseMove={(event) =>
-                    setHover({ m, x: event.clientX, y: event.clientY })
-                  }
+                  onMouseEnter={(event) => showHover(event, m)}
+                  onMouseMove={(event) => showHover(event, m)}
                   onMouseLeave={() => setHover(null)}
                 />
                 {m.is_anomaly && (
@@ -116,13 +117,13 @@ export default function StripLog({
       </svg>
 
       {hover && (
-        <div className="tooltip" style={{ left: hover.x + 14, top: hover.y - 10 }}>
+        <div className="tooltip" style={{ left: hover.x, top: hover.y, maxWidth: 260, whiteSpace: "normal" }}>
           {hover.m.depth_from_m}–{hover.m.depth_to_m} m
           <br />
           {hover.m.mineral_1 || "no mineral logged"}
           {hover.m.mineral_1_pct ? ` ${(hover.m.mineral_1_pct * 100).toFixed(0)}%` : ""}
           <br />
-          confidence {hover.m.confidence.toFixed(2)} · {hover.m.quality_flag}
+          confidence {hover.m.confidence.toFixed(2)} (sample agreement) · {hover.m.quality_flag}
           {hover.m.why && (
             <>
               <br />

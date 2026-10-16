@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getHole, getMeasurements, getNearby, getSpectralSample, getTrays } from "@/lib/api";
-import { ANOMALY_COLOUR, LOW_CONFIDENCE_COLOUR, MINERAL_COLOURS } from "@/config";
+import { ANOMALY_COLOUR, CONFIDENCE_THRESHOLD, LOW_CONFIDENCE_COLOUR, MINERAL_COLOURS } from "@/config";
 import { distinctName } from "@/lib/format";
 import StripLog from "./StripLog";
 import CoreTrays from "./CoreTrays";
@@ -17,6 +17,10 @@ export default function HoleDetail({ holeId, onSelect }) {
   const [nearby, setNearby] = useState([]);
   // undefined = still checking, null = checked and nothing available, object = real data
   const [spectral, setSpectral] = useState(undefined);
+  const [spectralError, setSpectralError] = useState(false);
+  const [spectralAttempt, setSpectralAttempt] = useState(0);
+  const [traysError, setTraysError] = useState(false);
+  const [nearbyError, setNearbyError] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -24,31 +28,41 @@ export default function HoleDetail({ holeId, onSelect }) {
     let cancelled = false;
     setError(null);
     setHole(null);
-    setSpectral(undefined);
+    setMeasurements([]);
+    setTrays(undefined);
+    setNearby(undefined);
+    setTraysError(false);
+    setNearbyError(false);
 
-    Promise.all([
-      getHole(holeId),
-      getMeasurements(holeId),
-      getTrays(holeId),
-      getNearby(holeId, 50),
-    ])
-      .then(([holeData, measurementData, trayData, nearbyData]) => {
+    Promise.all([getHole(holeId), getMeasurements(holeId)])
+      .then(([holeData, measurementData]) => {
         if (cancelled) return;
         setHole(holeData);
         setMeasurements(measurementData);
-        setTrays(trayData);
-        setNearby(nearbyData);
-        // separate request: every hole tries this, but the 5 database5553
-        // holes answer instantly while everyone else is a live NVCL lookup
-        // (a few seconds) - no need to hold up the rest of the panel on it
-        getSpectralSample(holeId).then((data) => !cancelled && setSpectral(data));
       })
       .catch((err) => !cancelled && setError(err.message));
+
+    // Optional sections must not hide a loaded mineral log or confidence.
+    getTrays(holeId).then((data) => !cancelled && setTrays(data))
+      .catch(() => !cancelled && setTraysError(true));
+    getNearby(holeId, 50).then((data) => !cancelled && setNearby(data))
+      .catch(() => !cancelled && setNearbyError(true));
 
     return () => {
       cancelled = true;
     };
   }, [holeId]);
+
+  useEffect(() => {
+    if (!holeId) return;
+    let cancelled = false;
+    setSpectral(undefined);
+    setSpectralError(false);
+    getSpectralSample(holeId)
+      .then((data) => !cancelled && setSpectral(data))
+      .catch(() => !cancelled && setSpectralError(true));
+    return () => { cancelled = true; };
+  }, [holeId, spectralAttempt]);
 
   if (!holeId) {
     return (
@@ -70,7 +84,7 @@ export default function HoleDetail({ holeId, onSelect }) {
     return <aside className="detail"><p className="hint">Loading {holeId}…</p></aside>;
   }
 
-  const lowConfidence = measurements.filter((m) => m.confidence < 0.5).length;
+  const lowConfidence = measurements.filter((m) => m.confidence < CONFIDENCE_THRESHOLD).length;
 
   return (
     <aside className="detail">
@@ -118,15 +132,26 @@ export default function HoleDetail({ holeId, onSelect }) {
       </table>
 
       <p className="section-title">Mineral log</p>
+      <p className="hint">
+        Confidence is the fraction of samples in each metre matching its dominant mineral group.
+        Invalid and unclassified samples stay in the total. Below {Math.round(CONFIDENCE_THRESHOLD * 100)}% is shown in grey.
+        Source Process Level confidence is not available from the API.
+      </p>
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
         <StripLog measurements={measurements} height={420} />
         <Legend measurements={measurements} lowConfidence={lowConfidence} />
       </div>
 
-      <CoreTrays trays={trays} />
+      {traysError ? <p className="hint" role="status">Unable to load core trays.</p>
+        : trays === undefined ? <p className="hint">Loading core trays…</p> : <CoreTrays trays={trays} />}
 
       <p className="section-title" style={{ marginTop: 22 }}>Full spectral data</p>
-      {spectral === undefined && (
+      {spectralError ? (
+        <div role="status">
+          <p className="hint">Unable to load the spectrum. The mineral log is still available.</p>
+          <button onClick={() => setSpectralAttempt((attempt) => attempt + 1)}>Retry spectrum</button>
+        </div>
+      ) : spectral === undefined && (
         <p className="hint">Loading real VSWIR/TIR spectrum…</p>
       )}
       {spectral === null && (
@@ -135,7 +160,9 @@ export default function HoleDetail({ holeId, onSelect }) {
       {spectral && <FullSpectrum sample={spectral} />}
 
       <p className="section-title" style={{ marginTop: 22 }}>Nearest holes</p>
-      {nearby.length === 0 ? (
+      {nearbyError ? <p className="hint" role="status">Unable to load nearby holes.</p>
+      : nearby === undefined ? <p className="hint">Loading nearby holes…</p>
+      : nearby.length === 0 ? (
         <p className="hint">Nothing else within 50 km.</p>
       ) : (
         <div>
@@ -209,6 +236,7 @@ function FullSpectrum({ sample }) {
         Sample {sample.sample_no} of {sample.sample_count} · {sample.md_m?.toFixed(2)} m
         {" · "}
         {SPECTRAL_SOURCE_LABELS[sample.source] || sample.source}
+        {sample.dataset_name && <> · {sample.dataset_name}</>}
       </p>
 
       {uniqueMinerals.length > 0 && (
@@ -249,7 +277,9 @@ function Sparkline({ spectrum, width = 320, height = 70 }) {
       <p className="hint" style={{ marginBottom: 2 }}>
         {spectrum.region} · {values.length} channels · {spectrum.wavelength[0]}–{spectrum.wavelength.at(-1)} {spectrum.wavelength_unit}
       </p>
-      <svg width={width} height={height} role="img" aria-label={`${spectrum.region} spectrum`}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}
+        style={{ display: "block", width: "100%", maxWidth: width, height: "auto" }}
+        role="img" aria-label={`${spectrum.region} spectrum`}>
         <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
       </svg>
     </div>

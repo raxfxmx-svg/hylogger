@@ -78,7 +78,15 @@ export default function CoreStripPanel({ holeId, className = "" }) {
                 {sheet.tsg_url && (
                   <img loading="lazy" src={MEDIA_BASE + sheet.tsg_url} alt={`TSG mineral, ${sheet.depth_from_m}-${sheet.depth_to_m} m`} />
                 )}
-                <img loading="lazy" src={MEDIA_BASE + sheet.photo_url} alt={`Core photo, ${sheet.depth_from_m}-${sheet.depth_to_m} m`} />
+                {sheet.crop_from != null ? (
+                  <div style={{ width: 300 * (sheet.crop_to - sheet.crop_from), overflow: "hidden", flexShrink: 0 }}>
+                    <img loading="lazy" src={MEDIA_BASE + sheet.photo_url}
+                      style={{ width: 300, maxWidth: "none", marginLeft: -300 * sheet.crop_from, transform: sheet.flip ? "scaleX(-1)" : undefined }}
+                      alt={`Core photo, ${sheet.depth_from_m}-${sheet.depth_to_m} m`} />
+                  </div>
+                ) : (
+                  <img loading="lazy" src={MEDIA_BASE + sheet.photo_url} alt={`Core photo, ${sheet.depth_from_m}-${sheet.depth_to_m} m`} />
+                )}
               </div>
             </div>
           ))}
