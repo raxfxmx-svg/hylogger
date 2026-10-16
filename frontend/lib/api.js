@@ -5,6 +5,7 @@
 // stay as they are.
 
 import { API_BASE } from "@/config";
+import bundledAnomalies from "@/data/anomalies.json";
 import { cached, CATALOG_TTL } from "./dataCache";
 export { clearDataCache } from "./dataCache";
 
@@ -91,7 +92,7 @@ export const getHoles = async ({ search = "", anomaliesOnly = false } = {}) => {
     (h) => !needle || h.hole_id.toLowerCase().includes(needle) || h.hole_name.toLowerCase().includes(needle)
   );
   if (anomaliesOnly) {
-    const flagged = await Promise.all(holes.map((h) => holeAnomalies(h.hole_id).then((a) => a.length > 0, () => false)));
+    const flagged = await Promise.all(holes.map((h) => getAnomalies(h.hole_id).then((a) => a.length > 0, () => false)));
     holes = holes.filter((_, i) => flagged[i]);
   }
   return holes;
@@ -100,11 +101,12 @@ export const getHoles = async ({ search = "", anomaliesOnly = false } = {}) => {
 export const getHole = async (holeId) => {
   const hole = (await allHoles()).find((h) => h.hole_id === holeId);
   if (!hole) throw new Error(`${holeId} is not in the active ETL4 release.`);
-  const measurements = await getMeasurements(holeId);
+  const [measurements, anomalies] = await Promise.all([getMeasurements(holeId), getAnomalies(holeId)]);
   return {
     ...hole,
     measurement_count: measurements.length,
-    anomaly_count: measurements.filter((m) => m.is_anomaly).length,
+    anomaly_count: anomalies.length,
+    anomalies,
     logged_from_m: measurements[0]?.depth_from_m ?? hole.logged_from_m,
     logged_to_m: measurements.at(-1)?.depth_to_m ?? hole.logged_to_m,
   };
@@ -176,6 +178,26 @@ const holeAnomalies = (holeId, ctx) =>
     return items;
   }, undefined, ctx);
 
+/** Display supplied model intervals by hole and depth, retaining their source IDs. */
+export const getAnomalies = async (holeId, ctx) => {
+  const supplied = bundledAnomalies.items.filter((item) => item.hole_id === holeId);
+  const current = await holeAnomalies(holeId, ctx).catch((error) => {
+    // Supplied intervals are independently available; other holes keep their error behaviour.
+    if (!supplied.length) throw error;
+    return [];
+  });
+  const byInterval = new Map();
+  // API rows replace supplied rows for the same interval, without duplicate marks/counts.
+  for (const item of [...supplied, ...current]) {
+    const from = Number(item.depth_from_m);
+    const to = Number(item.depth_to_m);
+    byInterval.set(`${from}:${to}`, {
+      ...item, hole_id: holeId, depth_from_m: from, depth_to_m: to, is_anomaly: true,
+    });
+  }
+  return [...byInterval.values()].sort((a, b) => a.depth_from_m - b.depth_from_m || a.depth_to_m - b.depth_to_m);
+};
+
 /** Most common value and its count. */
 function dominant(values) {
   const counts = new Map();
@@ -192,9 +214,9 @@ function dominant(values) {
  * says is still to come. ponytail: swap for confidence_level once FastAPI exposes it.
  */
 export const getMeasurements = (holeId) =>
-  datasetOnce("meas", holeId, async (ctx) => {
+  datasetOnce("meas:anomaly-display-v1", holeId, async (ctx) => {
     // A failed anomaly request must not be saved as a complete, unflagged log.
-    const [samples, anomalies] = await Promise.all([groupSamples(holeId, "SWIR", ctx), holeAnomalies(holeId, ctx)]);
+    const [samples, anomalies] = await Promise.all([groupSamples(holeId, "SWIR", ctx), getAnomalies(holeId, ctx)]);
     const metres = new Map();
     for (const s of samples) {
       if (s.depth_m == null) continue;
@@ -215,12 +237,11 @@ export const getMeasurements = (holeId) =>
         quality_flag: mineral ? "ok" : "missing",
         is_anomaly: !!flag,
         anomaly_score: flag?.anomaly_score ?? null, // 0-100 percentile, not a probability
+        score_reliability: flag?.score_reliability ?? null,
         why: flag?.why ?? null,
       };
     });
   });
-
-export const getAnomalies = async (holeId) => (await getMeasurements(holeId)).filter((m) => m.is_anomaly);
 
 /** Every hole's log as merged [from_m, to_m, code] runs, code indexing `groups` (null = uncertain). */
 export const getMineralLogs = async (minConfidence) => {
@@ -245,10 +266,11 @@ export const getMineralLogs = async (minConfidence) => {
 export const getStats = async () => {
   const holes = await allHoles();
   const logs = await Promise.all(holes.map((h) => getMeasurements(h.hole_id).catch(() => [])));
+  const anomalies = await Promise.all(holes.map((h) => getAnomalies(h.hole_id).catch(() => [])));
   return {
     holes: holes.length,
     measurements: logs.reduce((n, l) => n + l.length, 0),
-    anomalies: logs.reduce((n, l) => n + l.filter((m) => m.is_anomaly).length, 0),
+    anomalies: anomalies.reduce((n, items) => n + items.length, 0),
   };
 };
 
