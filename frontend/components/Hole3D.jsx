@@ -14,7 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import DeckGL, {
   COORDINATE_SYSTEM, LineLayer, OrbitView, ScatterplotLayer, SimpleMeshLayer, TextLayer,
 } from "deck.gl";
-import { getCoreStrip, getMeasurements } from "@/lib/api";
+import { getAnomalies, getCoreStrip, getMeasurements } from "@/lib/api";
 import {
   ANOMALY_COLOUR, CONFIDENCE_THRESHOLD, LOW_CONFIDENCE_COLOUR, MEDIA_BASE, mineralColour, toRgb,
 } from "@/config";
@@ -128,7 +128,7 @@ export default function Hole3D({ holeIds, distanceKm, onClose }) {
         )}
       </header>
 
-      {scene.ready && scene.cores.every((core) => !core.rows.length && !core.measurements.length) && (
+      {scene.ready && scene.cores.every((core) => !core.rows.length && !core.measurements.length && !core.anomalies.length) && (
         <p className="core3d-empty">
           ETL4 has no core photos or mineral log for {holeIds.join(" or ")}, so there is nothing to draw here.
           Pick another hole on the map.
@@ -185,6 +185,9 @@ function useHolesData(holeIds) {
       if (!cancelled) setByHole((all) => ({ ...all, [holeId]: { ...all[holeId], ...patch } }));
     };
     for (const holeId of holeIds) {
+      getAnomalies(holeId)
+        .then((anomalies) => put(holeId, { anomalies }))
+        .catch(() => put(holeId, { anomalies: [] }));
       getMeasurements(holeId)
         .then((measurements) => put(holeId, { measurements }))
         .catch(() => put(holeId, { measurements: [] }));
@@ -214,7 +217,7 @@ function useHeight(ref, fallback = 600) {
 /** Where each core stands, how wide it is, and the depth range they span. */
 function describe(holeIds, byHole) {
   const cores = holeIds.map((holeId) => {
-    const { measurements, strip } = byHole[holeId] || {};
+    const { measurements, strip, anomalies = [] } = byHole[holeId] || {};
     const rows = strip?.rows?.length ? strip.rows : [];
     const log = measurements || [];
     return {
@@ -222,6 +225,8 @@ function describe(holeIds, byHole) {
       strip,
       rows,
       measurements: log,
+      anomalies,
+      anomalyRange: anomalies.length ? [Math.min(...anomalies.map((a) => a.depth_from_m)), Math.max(...anomalies.map((a) => a.depth_to_m))] : null,
       loaded: measurements !== undefined && strip !== undefined,
       diameter: rows.length ? stripDiameter(strip) : FALLBACK_DIAMETER_M,
       photos: rows.length ? [strip.depth_min_m, strip.depth_max_m] : null,
@@ -233,7 +238,7 @@ function describe(holeIds, byHole) {
   cores.forEach((core, i) => {
     core.x = (i - (cores.length - 1) / 2) * spacing;
   });
-  const ranges = cores.flatMap((core) => [core.photos, core.logged]).filter(Boolean);
+  const ranges = cores.flatMap((core) => [core.photos, core.logged, core.anomalyRange]).filter(Boolean);
   return {
     cores,
     widest,
@@ -349,7 +354,12 @@ function intervalColour(m) {
 function intervalLabel(m) {
   const call = m.mineral_1 || "no mineral called";
   const sure = m.confidence < CONFIDENCE_THRESHOLD ? `uncertain (confidence ${m.confidence.toFixed(2)})` : `confidence ${m.confidence.toFixed(2)}`;
-  return [call, sure, m.why, m.is_anomaly ? "flagged unusual by the anomaly model" : ""].filter(Boolean).join(" · ");
+  return [call, sure, m.is_anomaly ? anomalyLabel(m) : m.why].filter(Boolean).join(" · ");
+}
+
+function anomalyLabel(item) {
+  return ["unusual", Number.isFinite(item.anomaly_score) ? `score ${item.anomaly_score.toFixed(2)} (percentile)` : null,
+    item.score_reliability ? `model reliability ${item.score_reliability}` : null, item.why].filter(Boolean).join(" · ");
 }
 
 function buildLayers(scene, [from, to], depth, visible, labelDropM, photosOn, textures, setHover) {
@@ -407,12 +417,12 @@ function buildLayers(scene, [from, to], depth, visible, labelDropM, photosOn, te
         colour: intervalColour(m), holeId: core.holeId, from: m.depth_from_m, to: m.depth_to_m,
         label: intervalLabel(m),
       });
-      if (m.is_anomaly) {
-        flags.push({
-          position: [core.x + r * 3.2, 0, -(m.depth_from_m + m.depth_to_m) / 2],
-          holeId: core.holeId, from: m.depth_from_m, to: m.depth_to_m, label: intervalLabel(m),
-        });
-      }
+    }
+    for (const item of core.anomalies.filter((a) => a.depth_to_m >= from && a.depth_from_m <= to)) {
+      flags.push({
+        position: [core.x + r * 3.2, 0, -(item.depth_from_m + item.depth_to_m) / 2],
+        holeId: core.holeId, from: item.depth_from_m, to: item.depth_to_m, label: anomalyLabel(item),
+      });
     }
     // the hole's name, riding just under the header (however tall it wraps)
     labels.push({ position: [core.x, 0, -(depth - visible / 2 + labelDropM)], text: core.holeId, colour: toRgb(HOLE_COLOURS[i]), anchor: "middle" });

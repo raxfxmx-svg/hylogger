@@ -19,6 +19,7 @@ import {
 
 export default function StripLog({
   measurements = [],
+  anomalies = measurements.filter((m) => m.is_anomaly),
   maxDepth,
   height = 460,
   width = 46,
@@ -27,11 +28,11 @@ export default function StripLog({
 }) {
   const [hover, setHover] = useState(null);
 
-  if (!measurements.length) {
+  if (!measurements.length && !anomalies.length) {
     return <p className="hint">No depth log for this hole.</p>;
   }
 
-  const bottom = maxDepth || Math.max(...measurements.map((m) => m.depth_to_m));
+  const bottom = maxDepth || Math.max(...measurements.map((m) => m.depth_to_m), ...anomalies.map((a) => a.depth_to_m));
   const toY = (depth) => (depth / bottom) * height;
 
   // depth ruler every 20 m, or whatever divides the hole into ~8 marks
@@ -97,18 +98,24 @@ export default function StripLog({
                   }
                   onMouseLeave={() => setHover(null)}
                 />
-                {m.is_anomaly && (
-                  <rect
-                    x={gutter + width + 3}
-                    y={y}
-                    width={7}
-                    height={Math.max(2, bandHeight)}
-                    fill={ANOMALY_COLOUR}
-                  />
-                )}
               </g>
             );
           })}
+
+          {anomalies.map((item) => (
+            <rect
+              key={`${item.depth_from_m}:${item.depth_to_m}`}
+              x={gutter + width + 3}
+              y={toY(item.depth_from_m)}
+              width={7}
+              height={Math.max(2, toY(item.depth_to_m) - toY(item.depth_from_m))}
+              fill={ANOMALY_COLOUR}
+              aria-label={`Anomaly ${item.depth_from_m}–${item.depth_to_m} m, score ${item.anomaly_score?.toFixed(2) ?? "unavailable"}`}
+              onMouseEnter={(event) => setHover({ m: item, x: event.clientX, y: event.clientY })}
+              onMouseMove={(event) => setHover({ m: item, x: event.clientX, y: event.clientY })}
+              onMouseLeave={() => setHover(null)}
+            />
+          ))}
 
           <rect x={gutter} y={0} width={width} height={height}
                 fill="none" stroke="var(--line)" />
@@ -119,10 +126,14 @@ export default function StripLog({
         <div className="tooltip" style={{ left: hover.x + 14, top: hover.y - 10 }}>
           {hover.m.depth_from_m}–{hover.m.depth_to_m} m
           <br />
-          {hover.m.mineral_1 || "no mineral logged"}
-          {hover.m.mineral_1_pct ? ` ${(hover.m.mineral_1_pct * 100).toFixed(0)}%` : ""}
-          <br />
-          confidence {hover.m.confidence.toFixed(2)} · {hover.m.quality_flag}
+          {Number.isFinite(hover.m.confidence) && (
+            <>
+              {hover.m.mineral_1 || "no mineral logged"}
+              {hover.m.mineral_1_pct ? ` ${(hover.m.mineral_1_pct * 100).toFixed(0)}%` : ""}
+              <br />
+              confidence {hover.m.confidence.toFixed(2)} · {hover.m.quality_flag}
+            </>
+          )}
           {hover.m.why && (
             <>
               <br />
@@ -134,6 +145,7 @@ export default function StripLog({
               <br />
               <span style={{ color: ANOMALY_COLOUR }}>
                 unusual · score {hover.m.anomaly_score?.toFixed(2)}
+                {hover.m.score_reliability && ` · model reliability ${hover.m.score_reliability}`}
               </span>
             </>
           )}
