@@ -120,9 +120,28 @@ export default function HoleDetail({ holeId, onSelect }) {
 
       <p className="section-title">Mineral log</p>
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <StripLog measurements={measurements} height={420} />
+        <StripLog measurements={measurements} anomalies={hole.anomalies} height={420} />
         <Legend measurements={measurements} lowConfidence={lowConfidence} />
       </div>
+
+      {hole.anomalies?.length > 0 && (
+        <>
+          <p className="section-title">Unusual intervals ({hole.anomaly_count})</p>
+          <p className="hint">Score is a 0–100 model percentile. Model reliability is separate from mineral sample agreement.</p>
+          <table className="facts" aria-label="Anomaly scores">
+            <thead><tr><th>Depth (m)</th><th>Score</th><th>Reliability</th></tr></thead>
+            <tbody>
+              {hole.anomalies.map((item) => (
+                <tr key={`${item.depth_from_m}:${item.depth_to_m}`} title={item.why || undefined}>
+                  <td>{item.depth_from_m}–{item.depth_to_m}</td>
+                  <td>{item.anomaly_score?.toFixed(2) ?? "–"}</td>
+                  <td>{item.score_reliability || "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
 
       <CoreTrays trays={trays} />
 
