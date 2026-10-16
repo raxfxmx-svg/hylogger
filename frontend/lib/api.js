@@ -111,15 +111,30 @@ export const getHole = async (holeId) => {
 
 // ------------------------------------------------------- dataset context
 
-/** The hole's dataset revision + sample axis + log catalogue - every later call needs them. */
+/** Use each dataset from its start depth until the next dataset starts.
+ * Keep revision/axis identity: sample numbers start again in every part. */
 const context = (holeId) =>
   once(`ctx:${holeId}`, async () => {
     const { items } = await get(`/v1/boreholes/${encodeURIComponent(holeId)}/datasets`);
-    const dataset = items.filter((d) => d.axis_id).sort((a, b) => b.sample_count - a.sample_count)[0];
-    if (!dataset) throw new Error(`${holeId} has no sample axis in ETL4.`);
-    const { items: logs } = await get(`/v1/datasets/${dataset.dataset_revision_id}/logs`);
-    return { revision: dataset.dataset_revision_id, axis: dataset.axis_id, sampleCount: dataset.sample_count, logs };
+    const datasets = items.filter((d) => d.axis_id);
+    if (!datasets.length) throw new Error(`${holeId} has no sample axis in ETL4.`);
+    if (datasets.length > 1 && datasets.some((d) => !Number.isFinite(d.depth_min_m))) {
+      throw new Error(`${holeId} has datasets without start depths; their splice order cannot be determined.`);
+    }
+    // Stable sorting preserves the API's precedence for equal start depths.
+    datasets.sort((a, b) => a.depth_min_m - b.depth_min_m);
+    return Promise.all(datasets.map(async (d, i) => {
+      const { items: logs } = await get(`/v1/datasets/${d.dataset_revision_id}/logs`);
+      return {
+        part: i, revision: d.dataset_revision_id, axis: d.axis_id,
+        name: d.source_dataset_name, sampleCount: d.sample_count, logs,
+        from: d.depth_min_m ?? -Infinity,
+        to: datasets[i + 1]?.depth_min_m ?? Infinity,
+      };
+    }));
   });
+
+const inPart = (part, depth) => Number.isFinite(depth) && depth >= part.from && depth < part.to;
 
 const usable = (log) => log.availability_status === "payload_present" && log.axis_binding_status === "verified";
 
@@ -153,26 +168,49 @@ function groupName(row) {
   return !name || ["ASPECTRAL", "NULL", "INVALID"].includes(name) ? null : name;
 }
 
+const partSamples = (part, region = "SWIR") =>
+  once(`part:${part.revision}:${part.axis}:${region}`, async () => {
+    const log = groupLog(part.logs, region);
+    return log ? logValues(part, log.log_id) : [];
+  });
+
 const groupSamples = (holeId, region = "SWIR") =>
   once(`grp:${holeId}:${region}`, async () => {
-    const ctx = await context(holeId);
-    const log = groupLog(ctx.logs, region);
-    return log ? logValues(ctx, log.log_id) : [];
+    const parts = await Promise.all((await context(holeId)).map(async (part) =>
+      (await partSamples(part, region))
+        .filter((s) => inPart(part, s.depth_m))
+        .map((s) => ({ ...s, part: part.part }))
+    ));
+    return parts.flat().sort((a, b) => a.depth_m - b.depth_m);
   });
 
 // ------------------------------------------------------- measurements
 
+async function allPages(path, params) {
+  const items = [];
+  let offset = 0;
+  while (offset != null) {
+    const page = await get(`${path}?${qs({ ...params, offset, limit: 1000 })}`);
+    items.push(...page.items);
+    offset = page.next_offset;
+  }
+  return items;
+}
+
+function clipToPart(item, part) {
+  if (!Number.isFinite(item.depth_from_m) || !Number.isFinite(item.depth_to_m)) return null;
+  const from = Math.max(item.depth_from_m, part.from);
+  const to = Math.min(item.depth_to_m, part.to);
+  return to > from ? { ...item, part: part.part, depth_from_m: from, depth_to_m: to } : null;
+}
+
 const holeAnomalies = (holeId) =>
   once(`anom:${holeId}`, async () => {
-    const { revision, axis } = await context(holeId);
-    const items = [];
-    let offset = 0;
-    while (offset != null) {
-      const page = await get(`/v1/datasets/${revision}/anomalies?${qs({ axis_id: axis, flag: "high", offset, limit: 1000 })}`);
-      items.push(...page.items);
-      offset = page.next_offset;
-    }
-    return items;
+    const parts = await Promise.all((await context(holeId)).map(async (part) => {
+      const items = await allPages(`/v1/datasets/${part.revision}/anomalies`, { axis_id: part.axis, flag: "high" });
+      return items.map((item) => clipToPart(item, part)).filter(Boolean);
+    }));
+    return parts.flat();
   });
 
 /** Most common value and its count. */
@@ -188,7 +226,7 @@ function dominant(values) {
  * Raw samples -> one interval per metre. confidence is the share of that
  * metre's samples agreeing with its dominant group - an honest read of how
  * mixed the metre is, NOT the Process-Level confidence FRONTEND_API.md §15
- * says is still to come. ponytail: swap for confidence_level once FastAPI exposes it.
+ * says is still to come. Keep source confidence separate when the API exposes it.
  */
 export const getMeasurements = (holeId) =>
   once(`meas:${holeId}`, async () => {
@@ -284,23 +322,25 @@ export const getDistance = async (a, b) => {
 /** Interval rows (tray or section) with depths read off the sample axis. */
 const intervals = (holeId, kind) =>
   once(`int:${holeId}:${kind}`, async () => {
-    const { revision, axis } = await context(holeId);
-    const items = [];
-    let offset = 0;
-    while (offset != null) {
-      const page = await get(`/v1/datasets/${revision}/intervals?${qs({ axis_id: axis, kind, offset, limit: 1000 })}`);
-      items.push(...page.items);
-      offset = page.next_offset;
-    }
-    // the group log holds every sample's depth, so no extra /samples paging
-    const samples = await groupSamples(holeId);
-    const depth = new Map(samples.map((s) => [s.sample_no, s.depth_m]));
-    return items
-      .map((it) => ({ ...it, depth_from_m: depth.get(it.sample_no_from), depth_to_m: depth.get(it.sample_no_to) }))
-      .filter((it) => it.depth_from_m != null && it.depth_to_m != null);
+    const parts = await Promise.all((await context(holeId)).map(async (part) => {
+      const [items, samples] = await Promise.all([
+        allPages(`/v1/datasets/${part.revision}/intervals`, { axis_id: part.axis, kind }),
+        partSamples(part),
+      ]);
+      // Use the uncut axis to retain intervals crossing a splice boundary.
+      const depth = new Map(samples.map((s) => [s.sample_no, s.depth_m]));
+      return items.map((item) => {
+        const from = depth.get(item.sample_no_from);
+        const to = depth.get(item.sample_no_to);
+        return clipToPart({ ...item, depth_from_m: from, depth_to_m: to,
+          source_depth_from_m: from, source_depth_to_m: to }, part);
+      }).filter(Boolean);
+    }));
+    return parts.flat().sort((a, b) => a.depth_from_m - b.depth_from_m);
   });
 
-const callsBetween = (rows, from, to) => rows.filter((s) => s.sample_no >= from && s.sample_no <= to).map(groupName);
+const callsBetween = (rows, interval) => rows.filter((s) => s.part === interval.part &&
+  s.sample_no >= interval.sample_no_from && s.sample_no <= interval.sample_no_to).map(groupName);
 
 export const getTrays = async (holeId) => {
   const [trays, swir, tir] = await Promise.all([
@@ -308,13 +348,13 @@ export const getTrays = async (holeId) => {
     groupSamples(holeId, "SWIR"),
     groupSamples(holeId, "TIR"),
   ]);
-  return trays.map((tray) => ({
-    tray_no: tray.ordinal + 1,
+  return trays.map((tray, i) => ({
+    tray_no: i + 1,
     depth_from_m: tray.depth_from_m,
     depth_to_m: tray.depth_to_m,
     image_url: null, // ETL4 serves per-row crops, not whole-tray photos; those are in the core strip
-    swir_vnir_mineral: dominant(callsBetween(swir, tray.sample_no_from, tray.sample_no_to))[0],
-    tir_mineral: dominant(callsBetween(tir, tray.sample_no_from, tray.sample_no_to))[0],
+    swir_vnir_mineral: dominant(callsBetween(swir, tray))[0],
+    tir_mineral: dominant(callsBetween(tir, tray))[0],
   }));
 };
 
@@ -327,31 +367,38 @@ export const getTrays = async (holeId) => {
  */
 export const getCoreStrip = (holeId) =>
   once(`strip:${holeId}`, async () => {
-    const ctx = await context(holeId);
+    const parts = await context(holeId);
     const sections = await intervals(holeId, "section");
-    const anyLog = groupLog(ctx.logs, "SWIR") || ctx.logs.find(usable);
-    if (!sections.length || !anyLog) return { unavailable: "ETL4 has no core-section photos for this hole." };
+    if (!sections.length) return { unavailable: "ETL4 has no core-section photos for this hole." };
 
     const found = await pool(sections, 8, async (section) => {
+      const ctx = parts[section.part];
       const sample = await get(
-        `/v1/datasets/${ctx.revision}/samples/${section.sample_no_from}?${qs({ axis_id: ctx.axis, log_ids: anyLog.log_id })}`
+        `/v1/datasets/${ctx.revision}/samples/${section.sample_no_from}?${qs({ axis_id: ctx.axis, include_results: false })}`
       ).catch(() => null);
       const image = sample?.images?.find((im) => im.status === "available" && im.image_asset_id);
       return image && { section, image };
     });
 
-    const rows = found.filter(Boolean).map(({ section, image }, i) => ({
-      sheet_index: i,
-      depth_from_m: section.depth_from_m,
-      depth_to_m: section.depth_to_m,
-      // after rotating, depth runs down the image's width
-      y_from_px: 0,
-      y_to_px: image.width_px,
-      rotate: true,
-      flip: /right.?to.?left|decreas/i.test(image.source_depth_direction || ""),
-      photo_url: `/v1/image-assets/${image.image_asset_id}/content`,
-      height_px: image.height_px,
-    }));
+    const rows = found.filter(Boolean).map(({ section, image }, i) => {
+      const length = section.source_depth_to_m - section.source_depth_from_m;
+      const cropFrom = (section.depth_from_m - section.source_depth_from_m) / length;
+      const cropTo = (section.depth_to_m - section.source_depth_from_m) / length;
+      return {
+        sheet_index: i,
+        depth_from_m: section.depth_from_m,
+        depth_to_m: section.depth_to_m,
+        // after rotating, depth runs down the image's width
+        y_from_px: cropFrom * image.width_px,
+        y_to_px: cropTo * image.width_px,
+        crop_from: cropFrom,
+        crop_to: cropTo,
+        rotate: true,
+        flip: /right.?to.?left|decreas/i.test(image.source_depth_direction || ""),
+        photo_url: `/v1/image-assets/${image.image_asset_id}/content`,
+        height_px: image.height_px,
+      };
+    });
     if (!rows.length) return { unavailable: "ETL4 has no reviewed core-section photos for this hole." };
 
     return {
@@ -364,6 +411,9 @@ export const getCoreStrip = (holeId) =>
         depth_from_m: r.depth_from_m,
         depth_to_m: r.depth_to_m,
         photo_url: r.photo_url,
+        crop_from: r.crop_from,
+        crop_to: r.crop_to,
+        flip: r.flip,
         tsg_url: null,
       })),
     };
@@ -373,8 +423,7 @@ export const getCoreStrip = (holeId) =>
 
 /** Real VSWIR/TIR spectrum + mineral calls at one sample (nearest to depthM, else mid-hole with a call). */
 export const getSpectralSample = async (holeId, depthM) => {
-  const ctx = await context(holeId).catch(() => null);
-  if (!ctx) return null;
+  const parts = await context(holeId);
   const samples = await groupSamples(holeId);
   if (!samples.length) return null;
 
@@ -392,10 +441,20 @@ export const getSpectralSample = async (holeId, depthM) => {
     pick = samples[best];
   }
 
-  const logIds = ctx.logs
+  const ctx = parts[pick.part];
+  const logIds = [...new Set(ctx.logs
     .filter((l) => usable(l) && (l.log_kind === "spectral" || (l.log_kind === "scalar" && l.metric_key === "mineral_name")))
-    .map((l) => l.log_id);
-  const raw = await get(`/v1/datasets/${ctx.revision}/samples/${pick.sample_no}?${qs({ axis_id: ctx.axis, log_ids: logIds })}`);
+    .map((l) => l.log_id))];
+  if (!logIds.length) return null;
+  // The exact-sample endpoint accepts at most 16 IDs. Keep every mineral
+  // channel by merging batches for the SAME revision, axis and sample.
+  const batches = [];
+  for (let i = 0; i < logIds.length; i += 16) {
+    batches.push(await get(`/v1/datasets/${ctx.revision}/samples/${pick.sample_no}?${qs({
+      axis_id: ctx.axis, log_ids: logIds.slice(i, i + 16),
+    })}`));
+  }
+  const raw = { ...batches[0], results: batches.flatMap((batch) => batch.results) };
 
   const ok = (r) => r.status === "available";
   return {
@@ -403,6 +462,8 @@ export const getSpectralSample = async (holeId, depthM) => {
     sample_count: raw.sample_count,
     md_m: raw.md_m,
     source: "etl4",
+    dataset_name: ctx.name,
+    dataset_revision_id: ctx.revision,
     minerals: raw.results
       .filter((r) => r.log_kind === "scalar" && groupName({ status: r.status, value_text: r.value?.value_text }) !== null)
       .map((r) => ({ log_name: r.source_log_name, mineral: r.value.value_text })),
