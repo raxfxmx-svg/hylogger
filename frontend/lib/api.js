@@ -80,7 +80,24 @@ const allHoles = () =>
   once("holes", async () => {
     const { items } = await get("/v1/boreholes");
     const byId = new Map();
-    for (const row of items) if (!byId.has(row.hole_id)) byId.set(row.hole_id, toHole(row));
+    for (const row of items) {
+      if (!byId.has(row.hole_id)) {
+        byId.set(row.hole_id, toHole(row));
+      } else {
+        // Catalog rows may describe different parts of the same hole.
+        // Preserve the existing identity metadata but include every scan extent.
+        const hole = byId.get(row.hole_id);
+        if (Number.isFinite(row.scan_from_m)) {
+          hole.logged_from_m = Number.isFinite(hole.logged_from_m)
+            ? Math.min(hole.logged_from_m, row.scan_from_m) : row.scan_from_m;
+        }
+        if (Number.isFinite(row.scan_to_m)) {
+          hole.logged_to_m = Number.isFinite(hole.logged_to_m)
+            ? Math.max(hole.logged_to_m, row.scan_to_m) : row.scan_to_m;
+        }
+        hole.drawn_length_m = hole.logged_to_m ?? hole.borehole_length_m;
+      }
+    }
     return [...byId.values()];
   });
 
