@@ -30,7 +30,7 @@ function fixture(parts, options = {}) {
     const url = new URL(input, 'http://localhost:8000');
     calls.push(url);
     const p = url.pathname;
-    if (p === '/v1/boreholes') return { items: [{ hole_id: 'TEST', project: 'Splice regression fixture',
+    if (p === '/v1/boreholes') return { items: options.holes || [{ hole_id: 'TEST', project: 'Splice regression fixture',
       geometry: { coordinates: [116.5, -31] }, reported_length_m: 20, scan_from_m: 0, scan_to_m: 20 }] };
     if (p === '/v1/boreholes/nearby') {
       if (options.failNearby) throw Object.assign(new Error('fixture nearby failure'), { status: 503 });
@@ -91,7 +91,7 @@ function fixture(parts, options = {}) {
     .replace(/export const /g, 'const ');
   const sandbox = { URLSearchParams, fetch };
   vm.createContext(sandbox);
-  vm.runInContext(source + '\nthis.api = { getHole, getMeasurements, getMineralLogs, getStats, getTrays, getCoreStrip, getSpectralSample, groupName, groupSamples, holeAnomalies, intervals };', sandbox);
+  vm.runInContext(source + '\nthis.api = { getHoles, getHole, getMeasurements, getMineralLogs, getStats, getTrays, getCoreStrip, getSpectralSample, groupName, groupSamples, holeAnomalies, intervals };', sandbox);
   return { api: sandbox.api, calls, request };
 }
 module.exports = { row, log, group, part, fixture };

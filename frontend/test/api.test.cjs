@@ -3,6 +3,39 @@ const { test } = require('node:test');
 const { row, part, fixture } = require('./api-fixture.cjs');
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
+test('catalog list merges all scan depths for a repeated hole regardless of row order', async () => {
+  const holes = [
+    { hole_id: 'TEST', project: 'Gruyere', scan_from_m: 0.00415, scan_to_m: 221.4977 },
+    { hole_id: 'TEST', project: 'Gruyere', scan_from_m: 495.50299, scan_to_m: 1701.797 },
+    { hole_id: 'TEST', project: 'Gruyere', scan_from_m: 429.20374, scan_to_m: 501.04172 },
+    { hole_id: 'TEST', project: 'Gruyere', scan_from_m: 183.40323, scan_to_m: 501.9975 },
+  ];
+  const original = JSON.stringify(holes);
+  for (const rows of [holes, [...holes].reverse()]) {
+    const { api, calls } = fixture([], { holes: rows });
+    const result = await api.getHoles();
+    assert.equal(result.length, 1);
+    assert.equal(result[0].logged_from_m, 0.00415);
+    assert.equal(result[0].logged_to_m, 1701.797);
+    assert.equal(result[0].drawn_length_m, 1701.797);
+    assert.equal(calls.length, 1); // Uses the catalog response, no additional requests.
+  }
+  assert.equal(JSON.stringify(holes), original);
+});
+
+test('catalog extent merging handles missing depths and zero without adding reported lengths', async () => {
+  const base = { hole_id: 'TEST', project: 'Catalog metadata', reported_length_m: 318.6 };
+  const holes = [base, { ...base, scan_from_m: 0, scan_to_m: 1701.797 },
+    { ...base, scan_from_m: null, scan_to_m: null }];
+  const [hole] = await fixture([], { holes }).api.getHoles();
+  assert.equal(hole.logged_from_m, 0);
+  assert.equal(hole.logged_to_m, 1701.797);
+  assert.equal(hole.drawn_length_m, 1701.797);
+  assert.equal(hole.borehole_length_m, 318.6);
+  const [withoutScan] = await fixture([], { holes: [base, base] }).api.getHoles();
+  assert.equal(withoutScan.drawn_length_m, 318.6);
+});
+
 test('mineral_group is selected; INVALID stays in denominator without modifying source rows', async () => {
   const p = part('single', 10, Array.from({ length: 10 }, (_, i) => 10 + i / 100));
   p.swir.forEach((s, i) => { s.value_text = i < 8 ? 'INVALID' : 'CHLORITE'; });
